@@ -54,7 +54,7 @@ type BpfRingbufSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type BpfRingbufProgramSpecs struct {
-	KprobeOpenat *ebpf.ProgramSpec `ebpf:"kprobe_openat"`
+	DnsPacketParser *ebpf.ProgramSpec `ebpf:"dns_packet_parser"`
 }
 
 // BpfRingbufMapSpecs contains maps before they are loaded into the kernel.
@@ -68,7 +68,7 @@ type BpfRingbufMapSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type BpfRingbufVariableSpecs struct {
-	UnusedOpenat *ebpf.VariableSpec `ebpf:"unused_openat"`
+	UnusedDns *ebpf.VariableSpec `ebpf:"unused_dns"`
 }
 
 // BpfRingbufObjects contains all objects after they have been loaded into the kernel.
@@ -104,19 +104,19 @@ func (m *BpfRingbufMaps) Close() error {
 //
 // It can be passed to LoadBpfRingbufObjects or ebpf.CollectionSpec.LoadAndAssign.
 type BpfRingbufVariables struct {
-	UnusedOpenat *ebpf.Variable `ebpf:"unused_openat"`
+	UnusedDns *ebpf.Variable `ebpf:"unused_dns"`
 }
 
 // BpfRingbufPrograms contains all programs after they have been loaded into the kernel.
 //
 // It can be passed to LoadBpfRingbufObjects or ebpf.CollectionSpec.LoadAndAssign.
 type BpfRingbufPrograms struct {
-	KprobeOpenat *ebpf.Program `ebpf:"kprobe_openat"`
+	DnsPacketParser *ebpf.Program `ebpf:"dns_packet_parser"`
 }
 
 func (p *BpfRingbufPrograms) Close() error {
 	return _BpfRingbufClose(
-		p.KprobeOpenat,
+		p.DnsPacketParser,
 	)
 }
 

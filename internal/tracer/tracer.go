@@ -1,3 +1,5 @@
+//go:build linux
+
 package tracer
 
 import (
@@ -6,62 +8,28 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"runtime"
+	"net"
+	"net/netip"
+	"strconv"
+	"strings"
+	"syscall"
 
-	"github.com/akshatagarwl/pgtracer/internal/bpf"
+	"github.com/akshatagarwl/dnstracer/internal/bpf"
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/features"
-	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/perf"
 	"github.com/cilium/ebpf/ringbuf"
 	"github.com/cilium/ebpf/rlimit"
+	"github.com/miekg/dns"
 	"golang.org/x/sys/unix"
 )
 
-type EventReader interface {
-	Read() ([]byte, error)
-	Close() error
-}
-
-type ringBufReader struct {
-	*ringbuf.Reader
-}
-
-func (r *ringBufReader) Read() ([]byte, error) {
-	record, err := r.Reader.Read()
-	if err != nil {
-		return nil, err
-	}
-	return record.RawSample, nil
-}
-
-type perfBufReader struct {
-	*perf.Reader
-}
-
-func (p *perfBufReader) Read() ([]byte, error) {
-	for {
-		record, err := p.Reader.Read()
-		if err != nil {
-			return nil, err
-		}
-		if record.LostSamples > 0 {
-			slog.Warn("lost samples", "count", record.LostSamples)
-			continue
-		}
-		return record.RawSample, nil
-	}
-}
-
-type BpfObjects interface {
-	Close() error
-}
-
 type Tracer struct {
-	useRingBuf bool
-	link       link.Link
-	reader     EventReader
-	objs       BpfObjects
+	dnsSocket  int
+	ringReader *ringbuf.Reader
+	perfReader *perf.Reader
+	ringObjs   *bpf.BpfRingbufObjects
+	perfObjs   *bpf.BpfPerfbufObjects
 }
 
 func New(usePerfBuf bool) (*Tracer, error) {
@@ -74,76 +42,108 @@ func New(usePerfBuf bool) (*Tracer, error) {
 	useRingBuf := kernelSupportsRingBuf && !usePerfBuf
 
 	if !kernelSupportsRingBuf && !usePerfBuf {
-		slog.Info("ring buffer not supported by kernel, using perf buffer")
 		useRingBuf = false
 	}
 
-	slog.Info("loading ebpf",
-		"architecture", runtime.GOARCH,
-		"use_ring_buffer", useRingBuf,
-		"kernel_supports_ring_buf", kernelSupportsRingBuf,
-		"user_requested_perf_buf", usePerfBuf)
-
-	t := &Tracer{useRingBuf: useRingBuf}
+	t := &Tracer{}
 
 	if useRingBuf {
 		ringObjs := &bpf.BpfRingbufObjects{}
 		if err := bpf.LoadBpfRingbufObjects(ringObjs, nil); err != nil {
 			return nil, fmt.Errorf("load ringbuf objects: %w", err)
 		}
-		t.objs = ringObjs
-
-		l, err := link.Kprobe("sys_openat", ringObjs.KprobeOpenat, nil)
-		if err != nil {
-			ringObjs.Close()
-			return nil, fmt.Errorf("attach kprobe: %w", err)
-		}
-		t.link = l
+		t.ringObjs = ringObjs
 
 		rd, err := ringbuf.NewReader(ringObjs.Events)
 		if err != nil {
-			l.Close()
 			ringObjs.Close()
 			return nil, fmt.Errorf("new ringbuf reader: %w", err)
 		}
-		t.reader = &ringBufReader{rd}
+		t.ringReader = rd
+
+		dnsSocket, err := attachDNSTracer(ringObjs.DnsPacketParser)
+		if err != nil {
+			slog.Warn("failed to attach DNS tracer", "error", err)
+			t.dnsSocket = -1
+		} else {
+			t.dnsSocket = dnsSocket
+		}
 	} else {
 		perfObjs := &bpf.BpfPerfbufObjects{}
 		if err := bpf.LoadBpfPerfbufObjects(perfObjs, nil); err != nil {
 			return nil, fmt.Errorf("load perfbuf objects: %w", err)
 		}
-		t.objs = perfObjs
-
-		l, err := link.Kprobe("sys_openat", perfObjs.KprobeOpenat, nil)
-		if err != nil {
-			perfObjs.Close()
-			return nil, fmt.Errorf("attach kprobe: %w", err)
-		}
-		t.link = l
+		t.perfObjs = perfObjs
 
 		rd, err := perf.NewReader(perfObjs.Events, 4096)
 		if err != nil {
-			l.Close()
 			perfObjs.Close()
 			return nil, fmt.Errorf("new perf reader: %w", err)
 		}
-		t.reader = &perfBufReader{rd}
+		t.perfReader = rd
+
+		dnsSocket, err := attachDNSTracer(perfObjs.DnsPacketParser)
+		if err != nil {
+			slog.Warn("failed to attach DNS tracer", "error", err)
+			t.dnsSocket = -1
+		} else {
+			t.dnsSocket = dnsSocket
+		}
 	}
 
 	return t, nil
 }
 
+func attachDNSTracer(prog *ebpf.Program) (int, error) {
+	fd, err := unix.Socket(syscall.AF_PACKET, unix.SOCK_RAW, syscall.ETH_P_ALL)
+	if err != nil {
+		return -1, fmt.Errorf("create raw socket: %w", err)
+	}
+
+	const SO_ATTACH_BPF = 50
+	if err := unix.SetsockoptInt(fd, unix.SOL_SOCKET, SO_ATTACH_BPF, prog.FD()); err != nil {
+		unix.Close(fd)
+		return -1, fmt.Errorf("attach bpf to socket: %w", err)
+	}
+
+	return fd, nil
+}
+
+
+
 func (t *Tracer) Run() error {
 	slog.Info("tracing events", "message", "press ctrl+c to stop")
 
 	for {
-		rawSample, err := t.reader.Read()
-		if err != nil {
-			if errors.Is(err, ringbuf.ErrClosed) || errors.Is(err, perf.ErrClosed) {
-				return nil
+		var rawSample []byte
+		
+		if t.ringReader != nil {
+			record, readErr := t.ringReader.Read()
+			if readErr != nil {
+				if errors.Is(readErr, ringbuf.ErrClosed) {
+					return nil
+				}
+				slog.Error("reading event", "error", readErr)
+				continue
 			}
-			slog.Error("reading event", "error", err)
-			continue
+			rawSample = record.RawSample
+		} else {
+			for {
+				record, readErr := t.perfReader.Read()
+				if readErr != nil {
+					if errors.Is(readErr, perf.ErrClosed) {
+						return nil
+					}
+					slog.Error("reading event", "error", readErr)
+					continue
+				}
+				if record.LostSamples > 0 {
+					slog.Warn("lost samples", "count", record.LostSamples)
+					continue
+				}
+				rawSample = record.RawSample
+				break
+			}
 		}
 
 		if len(rawSample) < 4 {
@@ -151,38 +151,91 @@ func (t *Tracer) Run() error {
 			continue
 		}
 
-		eventType := binary.LittleEndian.Uint32(rawSample[:4])
+		var event bpf.BpfDnsEvent
+		if err := binary.Read(bytes.NewBuffer(rawSample), binary.LittleEndian, &event); err != nil {
+			slog.Error("parsing dns event", "error", err)
+			continue
+		}
 
-		switch bpf.BpfEventType(eventType) {
-		case bpf.BpfEventTypeEVENT_TYPE_OPENAT:
-			var event bpf.BpfOpenatEvent
-			if err := binary.Read(bytes.NewBuffer(rawSample), binary.LittleEndian, &event); err != nil {
-				slog.Error("parsing openat event", "error", err)
+		switch event.Header.Type {
+		case bpf.BpfEventTypeEVENT_TYPE_DNS_QUERY, bpf.BpfEventTypeEVENT_TYPE_DNS_RESPONSE:
+			
+			// Parse DNS packet using miekg library
+			srcAddr := netip.AddrFrom4([4]byte{byte(event.Saddr), byte(event.Saddr >> 8), byte(event.Saddr >> 16), byte(event.Saddr >> 24)})
+			dstAddr := netip.AddrFrom4([4]byte{byte(event.Daddr), byte(event.Daddr >> 8), byte(event.Daddr >> 16), byte(event.Daddr >> 24)})
+			
+			dnsData := event.DnsData[:event.DnsLen]
+			msg := new(dns.Msg)
+			if err := msg.Unpack(dnsData); err != nil {
+				slog.Error("failed to parse DNS packet", "error", err, 
+					"src", net.JoinHostPort(srcAddr.String(), strconv.Itoa(int(event.Sport))),
+					"dst", net.JoinHostPort(dstAddr.String(), strconv.Itoa(int(event.Dport))),
+					"dns_len", event.DnsLen)
 				continue
 			}
-			comm := unix.ByteSliceToString(event.Header.Comm[:])
-			slog.Info("openat event",
-				"pid", event.Header.Pid,
-				"tgid", event.Header.Tgid,
-				"uid", event.Uid,
-				"comm", comm,
+			
+			var questions []string
+			var questionTypes []string
+			for _, q := range msg.Question {
+				questions = append(questions, q.Name)
+				questionTypes = append(questionTypes, dns.TypeToString[q.Qtype])
+			}
+			
+			var answers []string
+			for _, rr := range msg.Answer {
+				switch v := rr.(type) {
+				case *dns.A:
+					answers = append(answers, v.A.String())
+				case *dns.AAAA:
+					answers = append(answers, v.AAAA.String())
+				case *dns.CNAME:
+					answers = append(answers, v.Target)
+				case *dns.MX:
+					answers = append(answers, strconv.Itoa(int(v.Preference))+" "+v.Mx)
+				case *dns.TXT:
+					answers = append(answers, strings.Join(v.Txt, " "))
+				case *dns.NS:
+					answers = append(answers, v.Ns)
+				case *dns.PTR:
+					answers = append(answers, v.Ptr)
+				case *dns.SOA:
+					answers = append(answers, v.Ns)
+				}
+			}
+			
+			slog.Info("dns",
+				"type", event.Header.Type,
+				"src", net.JoinHostPort(srcAddr.String(), strconv.Itoa(int(event.Sport))),
+				"dst", net.JoinHostPort(dstAddr.String(), strconv.Itoa(int(event.Dport))),
+				"id", msg.Id,
+				"question", strings.Join(questions, ", "),
+				"qtype", strings.Join(questionTypes, ", "),
+				"answer", strings.Join(answers, ", "),
 			)
 
 		default:
-			slog.Warn("unknown event type", "type", eventType)
+			slog.Warn("unknown event type", "type", event.Header.Type)
 		}
 	}
 }
 
+
+
 func (t *Tracer) Close() error {
-	if t.reader != nil {
-		t.reader.Close()
+	if t.ringReader != nil {
+		t.ringReader.Close()
 	}
-	if t.link != nil {
-		t.link.Close()
+	if t.perfReader != nil {
+		t.perfReader.Close()
 	}
-	if t.objs != nil {
-		t.objs.Close()
+	if t.dnsSocket != -1 {
+		unix.Close(t.dnsSocket)
+	}
+	if t.ringObjs != nil {
+		t.ringObjs.Close()
+	}
+	if t.perfObjs != nil {
+		t.perfObjs.Close()
 	}
 	return nil
 }

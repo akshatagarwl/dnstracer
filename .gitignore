@@ -1,5 +1,25 @@
+# Build outputs
 .bin/
+*.o
+
+# Binaries (in case they end up in root)
+/dnstracer
+/pgtracer
+
+# Go build artifacts
+*.test
+*.prof
+
+# Unused directories
 docs/
 scripts/
+
+# IDE/Editor files
 .clang-format
-*.o
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store

@@ -5,7 +5,7 @@ import (
 )
 
 type Config struct {
-	UsePerfBuf bool `env:"PGTRACER_USE_PERFBUF" envDefault:"false"`
+	UsePerfBuf bool `env:"DNSTRACER_USE_PERFBUF" envDefault:"false"`
 }
 
 func Load() (*Config, error) {

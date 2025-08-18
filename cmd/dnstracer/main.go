@@ -1,13 +1,22 @@
+//go:build linux
+
 package main
 
 import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 
-	"github.com/akshatagarwl/pgtracer/internal/config"
-	"github.com/akshatagarwl/pgtracer/internal/tracer"
+	"github.com/akshatagarwl/dnstracer/internal/config"
+	"github.com/akshatagarwl/dnstracer/internal/tracer"
+)
+
+// Build-time variables (injected via ldflags)
+var (
+	version   = "dev"
+	buildTime = "unknown"
 )
 
 func main() {
@@ -16,7 +25,12 @@ func main() {
 	}))
 	slog.SetDefault(logger)
 
-	slog.Info("starting pgtracer")
+	slog.Info("starting DNS tracer", 
+		"version", version,
+		"build_time", buildTime,
+		"arch", runtime.GOARCH,
+		"os", runtime.GOOS,
+		"message", "capturing DNS queries and responses")
 
 	cfg, err := config.Load()
 	if err != nil {

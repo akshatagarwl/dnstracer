@@ -54,22 +54,22 @@ type BpfPerfbufSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type BpfPerfbufProgramSpecs struct {
-	KprobeOpenat *ebpf.ProgramSpec `ebpf:"kprobe_openat"`
+	DnsPacketParser *ebpf.ProgramSpec `ebpf:"dns_packet_parser"`
 }
 
 // BpfPerfbufMapSpecs contains maps before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type BpfPerfbufMapSpecs struct {
-	Events     *ebpf.MapSpec `ebpf:"events"`
-	OpenatHeap *ebpf.MapSpec `ebpf:"openat_heap"`
+	DnsHeap *ebpf.MapSpec `ebpf:"dns_heap"`
+	Events  *ebpf.MapSpec `ebpf:"events"`
 }
 
 // BpfPerfbufVariableSpecs contains global variables before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type BpfPerfbufVariableSpecs struct {
-	UnusedOpenat *ebpf.VariableSpec `ebpf:"unused_openat"`
+	UnusedDns *ebpf.VariableSpec `ebpf:"unused_dns"`
 }
 
 // BpfPerfbufObjects contains all objects after they have been loaded into the kernel.
@@ -92,14 +92,14 @@ func (o *BpfPerfbufObjects) Close() error {
 //
 // It can be passed to LoadBpfPerfbufObjects or ebpf.CollectionSpec.LoadAndAssign.
 type BpfPerfbufMaps struct {
-	Events     *ebpf.Map `ebpf:"events"`
-	OpenatHeap *ebpf.Map `ebpf:"openat_heap"`
+	DnsHeap *ebpf.Map `ebpf:"dns_heap"`
+	Events  *ebpf.Map `ebpf:"events"`
 }
 
 func (m *BpfPerfbufMaps) Close() error {
 	return _BpfPerfbufClose(
+		m.DnsHeap,
 		m.Events,
-		m.OpenatHeap,
 	)
 }
 
@@ -107,19 +107,19 @@ func (m *BpfPerfbufMaps) Close() error {
 //
 // It can be passed to LoadBpfPerfbufObjects or ebpf.CollectionSpec.LoadAndAssign.
 type BpfPerfbufVariables struct {
-	UnusedOpenat *ebpf.Variable `ebpf:"unused_openat"`
+	UnusedDns *ebpf.Variable `ebpf:"unused_dns"`
 }
 
 // BpfPerfbufPrograms contains all programs after they have been loaded into the kernel.
 //
 // It can be passed to LoadBpfPerfbufObjects or ebpf.CollectionSpec.LoadAndAssign.
 type BpfPerfbufPrograms struct {
-	KprobeOpenat *ebpf.Program `ebpf:"kprobe_openat"`
+	DnsPacketParser *ebpf.Program `ebpf:"dns_packet_parser"`
 }
 
 func (p *BpfPerfbufPrograms) Close() error {
 	return _BpfPerfbufClose(
-		p.KprobeOpenat,
+		p.DnsPacketParser,
 	)
 }
 

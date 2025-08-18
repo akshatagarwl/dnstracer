@@ -13,27 +13,30 @@ import (
 	"github.com/cilium/ebpf"
 )
 
+type BpfDnsEvent struct {
+	_       structs.HostLayout
+	Header  BpfTraceEventHeader
+	Saddr   uint32
+	Daddr   uint32
+	Sport   uint16
+	Dport   uint16
+	DnsLen  uint16
+	DnsData [512]uint8
+	_       [2]byte
+}
+
 type BpfEventType uint32
 
 const (
-	BpfEventTypeEVENT_TYPE_OPENAT BpfEventType = 1
+	BpfEventTypeEVENT_TYPE_DNS_QUERY    BpfEventType = 1
+	BpfEventTypeEVENT_TYPE_DNS_RESPONSE BpfEventType = 2
 )
-
-type BpfOpenatEvent struct {
-	_      structs.HostLayout
-	Header BpfTraceEventHeader
-	Uid    uint32
-	_      [4]byte
-}
 
 type BpfTraceEventHeader struct {
 	_         structs.HostLayout
 	Type      BpfEventType
 	_         [4]byte
 	Timestamp uint64
-	Pid       uint32
-	Tgid      uint32
-	Comm      [16]uint8
 }
 
 // LoadBpf returns the embedded CollectionSpec for Bpf.
@@ -78,22 +81,22 @@ type BpfSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type BpfProgramSpecs struct {
-	KprobeOpenat *ebpf.ProgramSpec `ebpf:"kprobe_openat"`
+	DnsPacketParser *ebpf.ProgramSpec `ebpf:"dns_packet_parser"`
 }
 
 // BpfMapSpecs contains maps before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type BpfMapSpecs struct {
-	Events     *ebpf.MapSpec `ebpf:"events"`
-	OpenatHeap *ebpf.MapSpec `ebpf:"openat_heap"`
+	DnsHeap *ebpf.MapSpec `ebpf:"dns_heap"`
+	Events  *ebpf.MapSpec `ebpf:"events"`
 }
 
 // BpfVariableSpecs contains global variables before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type BpfVariableSpecs struct {
-	UnusedOpenat *ebpf.VariableSpec `ebpf:"unused_openat"`
+	UnusedDns *ebpf.VariableSpec `ebpf:"unused_dns"`
 }
 
 // BpfObjects contains all objects after they have been loaded into the kernel.
@@ -116,14 +119,14 @@ func (o *BpfObjects) Close() error {
 //
 // It can be passed to LoadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type BpfMaps struct {
-	Events     *ebpf.Map `ebpf:"events"`
-	OpenatHeap *ebpf.Map `ebpf:"openat_heap"`
+	DnsHeap *ebpf.Map `ebpf:"dns_heap"`
+	Events  *ebpf.Map `ebpf:"events"`
 }
 
 func (m *BpfMaps) Close() error {
 	return _BpfClose(
+		m.DnsHeap,
 		m.Events,
-		m.OpenatHeap,
 	)
 }
 
@@ -131,19 +134,19 @@ func (m *BpfMaps) Close() error {
 //
 // It can be passed to LoadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type BpfVariables struct {
-	UnusedOpenat *ebpf.Variable `ebpf:"unused_openat"`
+	UnusedDns *ebpf.Variable `ebpf:"unused_dns"`
 }
 
 // BpfPrograms contains all programs after they have been loaded into the kernel.
 //
 // It can be passed to LoadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type BpfPrograms struct {
-	KprobeOpenat *ebpf.Program `ebpf:"kprobe_openat"`
+	DnsPacketParser *ebpf.Program `ebpf:"dns_packet_parser"`
 }
 
 func (p *BpfPrograms) Close() error {
 	return _BpfClose(
-		p.KprobeOpenat,
+		p.DnsPacketParser,
 	)
 }
 

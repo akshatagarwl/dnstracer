@@ -16,6 +16,6 @@ struct {
   __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
   __uint(max_entries, 1);
   __type(key, u32);
-  __type(value, struct openat_event);
-} openat_heap SEC(".maps");
+  __type(value, struct dns_event);
+} dns_heap SEC(".maps");
 #endif
