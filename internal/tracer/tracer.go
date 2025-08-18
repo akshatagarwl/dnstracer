@@ -100,6 +100,21 @@ func attachDNSTracer(prog *ebpf.Program) (int, error) {
 		return -1, fmt.Errorf("create raw socket: %w", err)
 	}
 
+	iface, err := net.InterfaceByName("eth0")
+	if err != nil {
+		unix.Close(fd)
+		return -1, fmt.Errorf("get interface eth0: %w", err)
+	}
+
+	sockAddr := &unix.SockaddrLinklayer{
+		Protocol: 0x0300, // htons(ETH_P_ALL) - network byte order
+		Ifindex:  iface.Index,
+	}
+	if err := unix.Bind(fd, sockAddr); err != nil {
+		unix.Close(fd)
+		return -1, fmt.Errorf("bind socket to interface: %w", err)
+	}
+
 	const SO_ATTACH_BPF = 50
 	if err := unix.SetsockoptInt(fd, unix.SOL_SOCKET, SO_ATTACH_BPF, prog.FD()); err != nil {
 		unix.Close(fd)
