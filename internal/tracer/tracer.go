@@ -9,9 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"net/netip"
-	"strconv"
-	"strings"
 	"syscall"
 
 	"github.com/akshatagarwl/dnstracer/internal/bpf"
@@ -20,16 +17,17 @@ import (
 	"github.com/cilium/ebpf/perf"
 	"github.com/cilium/ebpf/ringbuf"
 	"github.com/cilium/ebpf/rlimit"
-	"github.com/miekg/dns"
 	"golang.org/x/sys/unix"
 )
 
 type Tracer struct {
-	dnsSocket  int
-	ringReader *ringbuf.Reader
-	perfReader *perf.Reader
-	ringObjs   *bpf.BpfRingbufObjects
-	perfObjs   *bpf.BpfPerfbufObjects
+	dnsSocket         int
+	ringReader        *ringbuf.Reader
+	perfReader        *perf.Reader
+	ringObjs          *bpf.BpfRingbufObjects
+	perfObjs          *bpf.BpfPerfbufObjects
+	queryProcessor    DNSProcessor
+	responseProcessor DNSProcessor
 }
 
 func New(usePerfBuf bool) (*Tracer, error) {
@@ -45,7 +43,10 @@ func New(usePerfBuf bool) (*Tracer, error) {
 		useRingBuf = false
 	}
 
-	t := &Tracer{}
+	t := &Tracer{
+		queryProcessor:    NewQueryProcessor(),
+		responseProcessor: NewResponseProcessor(),
+	}
 
 	if useRingBuf {
 		ringObjs := &bpf.BpfRingbufObjects{}
@@ -124,14 +125,12 @@ func attachDNSTracer(prog *ebpf.Program) (int, error) {
 	return fd, nil
 }
 
-
-
 func (t *Tracer) Run() error {
 	slog.Info("tracing events", "message", "press ctrl+c to stop")
 
 	for {
 		var rawSample []byte
-		
+
 		if t.ringReader != nil {
 			record, readErr := t.ringReader.Read()
 			if readErr != nil {
@@ -173,68 +172,19 @@ func (t *Tracer) Run() error {
 		}
 
 		switch event.Header.Type {
-		case bpf.BpfEventTypeEVENT_TYPE_DNS_QUERY, bpf.BpfEventTypeEVENT_TYPE_DNS_RESPONSE:
-			
-			// Parse DNS packet using miekg library
-			srcAddr := netip.AddrFrom4([4]byte{byte(event.Saddr), byte(event.Saddr >> 8), byte(event.Saddr >> 16), byte(event.Saddr >> 24)})
-			dstAddr := netip.AddrFrom4([4]byte{byte(event.Daddr), byte(event.Daddr >> 8), byte(event.Daddr >> 16), byte(event.Daddr >> 24)})
-			
-			dnsData := event.DnsData[:event.DnsLen]
-			msg := new(dns.Msg)
-			if err := msg.Unpack(dnsData); err != nil {
-				slog.Error("failed to parse DNS packet", "error", err, 
-					"src", net.JoinHostPort(srcAddr.String(), strconv.Itoa(int(event.Sport))),
-					"dst", net.JoinHostPort(dstAddr.String(), strconv.Itoa(int(event.Dport))),
-					"dns_len", event.DnsLen)
-				continue
+		case bpf.BpfEventTypeEVENT_TYPE_DNS_QUERY:
+			if err := t.queryProcessor.Process(&event); err != nil {
+				slog.Error("processing DNS query", "error", err)
 			}
-			
-			var questions []string
-			var questionTypes []string
-			for _, q := range msg.Question {
-				questions = append(questions, q.Name)
-				questionTypes = append(questionTypes, dns.TypeToString[q.Qtype])
+		case bpf.BpfEventTypeEVENT_TYPE_DNS_RESPONSE:
+			if err := t.responseProcessor.Process(&event); err != nil {
+				slog.Error("processing DNS response", "error", err)
 			}
-			
-			var answers []string
-			for _, rr := range msg.Answer {
-				switch v := rr.(type) {
-				case *dns.A:
-					answers = append(answers, v.A.String())
-				case *dns.AAAA:
-					answers = append(answers, v.AAAA.String())
-				case *dns.CNAME:
-					answers = append(answers, v.Target)
-				case *dns.MX:
-					answers = append(answers, strconv.Itoa(int(v.Preference))+" "+v.Mx)
-				case *dns.TXT:
-					answers = append(answers, strings.Join(v.Txt, " "))
-				case *dns.NS:
-					answers = append(answers, v.Ns)
-				case *dns.PTR:
-					answers = append(answers, v.Ptr)
-				case *dns.SOA:
-					answers = append(answers, v.Ns)
-				}
-			}
-			
-			slog.Info("dns",
-				"type", event.Header.Type,
-				"src", net.JoinHostPort(srcAddr.String(), strconv.Itoa(int(event.Sport))),
-				"dst", net.JoinHostPort(dstAddr.String(), strconv.Itoa(int(event.Dport))),
-				"id", msg.Id,
-				"question", strings.Join(questions, ", "),
-				"qtype", strings.Join(questionTypes, ", "),
-				"answer", strings.Join(answers, ", "),
-			)
-
 		default:
 			slog.Warn("unknown event type", "type", event.Header.Type)
 		}
 	}
 }
-
-
 
 func (t *Tracer) Close() error {
 	if t.ringReader != nil {
