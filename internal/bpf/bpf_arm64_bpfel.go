@@ -14,15 +14,23 @@ import (
 )
 
 type BpfDnsEvent struct {
-	_       structs.HostLayout
-	Header  BpfTraceEventHeader
-	Saddr   uint32
-	Daddr   uint32
+	_         structs.HostLayout
+	Header    BpfTraceEventHeader
+	IpVersion BpfIpVersion
+	Addr      struct {
+		_    structs.HostLayout
+		Ipv4 struct {
+			_     structs.HostLayout
+			Saddr uint32
+			Daddr uint32
+		}
+		_ [24]byte
+	}
 	Sport   uint16
 	Dport   uint16
 	DnsLen  uint16
 	DnsData [512]uint8
-	_       [2]byte
+	_       [6]byte
 }
 
 type BpfEventType uint32
@@ -30,6 +38,13 @@ type BpfEventType uint32
 const (
 	BpfEventTypeEVENT_TYPE_DNS_QUERY    BpfEventType = 1
 	BpfEventTypeEVENT_TYPE_DNS_RESPONSE BpfEventType = 2
+)
+
+type BpfIpVersion uint32
+
+const (
+	BpfIpVersionIP_VERSION_IPV4 BpfIpVersion = 4
+	BpfIpVersionIP_VERSION_IPV6 BpfIpVersion = 6
 )
 
 type BpfTraceEventHeader struct {

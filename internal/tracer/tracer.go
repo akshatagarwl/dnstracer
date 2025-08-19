@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"unsafe"
 
 	"github.com/akshatagarwl/dnstracer/internal/bpf"
 	"github.com/cilium/ebpf"
@@ -175,9 +176,22 @@ func (t *Tracer) Run() error {
 		switch event.Header.Type {
 		case bpf.BpfEventTypeEVENT_TYPE_DNS_QUERY, bpf.BpfEventTypeEVENT_TYPE_DNS_RESPONSE:
 			
-			// Parse DNS packet using miekg library
-			srcAddr := netip.AddrFrom4([4]byte{byte(event.Saddr), byte(event.Saddr >> 8), byte(event.Saddr >> 16), byte(event.Saddr >> 24)})
-			dstAddr := netip.AddrFrom4([4]byte{byte(event.Daddr), byte(event.Daddr >> 8), byte(event.Daddr >> 16), byte(event.Daddr >> 24)})
+			// Parse addresses based on IP version
+			var srcAddr, dstAddr netip.Addr
+			if event.IpVersion == bpf.BpfIpVersionIP_VERSION_IPV4 {
+				srcAddr = netip.AddrFrom4([4]byte{byte(event.Addr.Ipv4.Saddr), byte(event.Addr.Ipv4.Saddr >> 8), byte(event.Addr.Ipv4.Saddr >> 16), byte(event.Addr.Ipv4.Saddr >> 24)})
+				dstAddr = netip.AddrFrom4([4]byte{byte(event.Addr.Ipv4.Daddr), byte(event.Addr.Ipv4.Daddr >> 8), byte(event.Addr.Ipv4.Daddr >> 16), byte(event.Addr.Ipv4.Daddr >> 24)})
+			} else if event.IpVersion == bpf.BpfIpVersionIP_VERSION_IPV6 {
+				// Access IPv6 addresses from the union byte array
+				// IPv6 source address starts at the beginning of the union
+				addrPtr := unsafe.Pointer(&event.Addr)
+				srcAddr = netip.AddrFrom16(*(*[16]byte)(addrPtr))
+				// IPv6 destination address starts 16 bytes after source
+				dstAddr = netip.AddrFrom16(*(*[16]byte)(unsafe.Pointer(uintptr(addrPtr) + 16)))
+			} else {
+				slog.Error("unsupported IP version", "version", event.IpVersion)
+				continue
+			}
 			
 			dnsData := event.DnsData[:event.DnsLen]
 			msg := new(dns.Msg)
@@ -220,6 +234,7 @@ func (t *Tracer) Run() error {
 			
 			slog.Info("dns",
 				"type", event.Header.Type,
+				"ip_version", event.IpVersion,
 				"src", net.JoinHostPort(srcAddr.String(), strconv.Itoa(int(event.Sport))),
 				"dst", net.JoinHostPort(dstAddr.String(), strconv.Itoa(int(event.Dport))),
 				"id", msg.Id,
