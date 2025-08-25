@@ -5,7 +5,8 @@ import (
 )
 
 type Config struct {
-	UsePerfBuf bool `env:"DNSTRACER_USE_PERFBUF" envDefault:"false"`
+	UsePerfBuf bool   `env:"DNSTRACER_USE_PERFBUF" envDefault:"false"`
+	Interface  string `env:"DNSTRACER_INTERFACE" envDefault:"eth0"`
 }
 
 func Load() (*Config, error) {

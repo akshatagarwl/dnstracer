@@ -38,7 +38,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	t, err := tracer.New(cfg.UsePerfBuf)
+	t, err := tracer.New(cfg.UsePerfBuf, cfg.Interface)
 	if err != nil {
 		slog.Error("failed to create tracer", "error", err)
 		os.Exit(1)
