@@ -101,10 +101,6 @@ func attachDNSTracer(prog *ebpf.Program, interfaceName string) (int, error) {
 		return -1, fmt.Errorf("create raw socket: %w", err)
 	}
 
-	if interfaceName == "" {
-		interfaceName = "eth0"
-	}
-
 	iface, err := net.InterfaceByName(interfaceName)
 	if err != nil {
 		unix.Close(fd)
