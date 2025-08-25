@@ -30,7 +30,7 @@ type Tracer struct {
 	responseProcessor DNSProcessor
 }
 
-func New(usePerfBuf bool) (*Tracer, error) {
+func New(usePerfBuf bool, interfaceName string) (*Tracer, error) {
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return nil, fmt.Errorf("remove memlock: %w", err)
 	}
@@ -62,7 +62,7 @@ func New(usePerfBuf bool) (*Tracer, error) {
 		}
 		t.ringReader = rd
 
-		dnsSocket, err := attachDNSTracer(ringObjs.DnsPacketParser)
+		dnsSocket, err := attachDNSTracer(ringObjs.DnsPacketParser, interfaceName)
 		if err != nil {
 			slog.Warn("failed to attach DNS tracer", "error", err)
 			t.dnsSocket = -1
@@ -83,7 +83,7 @@ func New(usePerfBuf bool) (*Tracer, error) {
 		}
 		t.perfReader = rd
 
-		dnsSocket, err := attachDNSTracer(perfObjs.DnsPacketParser)
+		dnsSocket, err := attachDNSTracer(perfObjs.DnsPacketParser, interfaceName)
 		if err != nil {
 			slog.Warn("failed to attach DNS tracer", "error", err)
 			t.dnsSocket = -1
@@ -95,16 +95,20 @@ func New(usePerfBuf bool) (*Tracer, error) {
 	return t, nil
 }
 
-func attachDNSTracer(prog *ebpf.Program) (int, error) {
+func attachDNSTracer(prog *ebpf.Program, interfaceName string) (int, error) {
 	fd, err := unix.Socket(syscall.AF_PACKET, unix.SOCK_RAW, syscall.ETH_P_ALL)
 	if err != nil {
 		return -1, fmt.Errorf("create raw socket: %w", err)
 	}
 
-	iface, err := net.InterfaceByName("eth0")
+	if interfaceName == "" {
+		interfaceName = "eth0"
+	}
+
+	iface, err := net.InterfaceByName(interfaceName)
 	if err != nil {
 		unix.Close(fd)
-		return -1, fmt.Errorf("get interface eth0: %w", err)
+		return -1, fmt.Errorf("get interface %s: %w", interfaceName, err)
 	}
 
 	sockAddr := &unix.SockaddrLinklayer{
