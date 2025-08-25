@@ -1,6 +1,5 @@
 # Build outputs
 .bin/
-*.o
 
 # Binaries (in case they end up in root)
 /dnstracer
